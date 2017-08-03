@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+#
+# Copyright Red Hat Inc
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Cockpit.
+#
+
+PAGURE = "https://upstreamfirst.fedorainfracloud.org/api/0/"
+BASE = "https://upstreamfirst.fedorainfracloud.org/"
+
+import argparse
+import json
+import os
+import sys
+import tempfile
+import shutil
+import subprocess
+
+import urllib.request
+import urllib.parse
+
+def retrieve(url):
+    return urllib.request.urlopen(url).read()
+
+def projects():
+    url = urllib.parse.urljoin(PAGURE, "projects")
+    for project in json.loads(retrieve(url))["projects"]:
+        if not project.get("parent"):
+            yield project["name"]
+
+def clone(project, directory):
+    try:
+        url = urllib.parse.urljoin(BASE, project)
+        subprocess.check_call(["git", "clone", url ], cwd=directory, stdout=sys.stderr.fileno())
+    except subprocess.CalledProcessError:
+        return None
+    return os.path.join(directory, project)
+
+def count(stats, field, project):
+    if field not in stats:
+        stats[field] = [ ]
+    stats[field].append(project)
+
+def tags(repo, standard):
+    try:
+        playbook = standard and "tests.yml" or "test_local.yml"
+        environ = os.environ.copy()
+        environ["LC_ALL"] = "C"
+        output = subprocess.check_output([ "ansible-playbook", "--list-tags", playbook ], env=environ, cwd=repo)
+    except subprocess.CalledProcessError:
+        output = b""
+
+    for line in output.decode("utf-8").split("\n"):
+        if "TASK TAGS" in line:
+            name, unused, tags = line.partition(":")
+            for tag in tags.strip(" []").split(","):
+                yield tag.strip()
+
+def gather(repo, project, stats):
+
+    # Total number of repos with tests
+    # TODO: For now this counts them all, in upstreamfirst
+    count(stats, "total", project)
+
+    # Standard entry point
+    path = os.path.join(repo, "tests.yml")
+    standard = os.path.exists(path)
+    if standard:
+        count(stats, "tests.yml", project)
+
+    # Check if we have an old style test_cloud.yml file
+    path = os.path.join(repo, "test_cloud.yml")
+    if os.path.exists(path):
+        count(stats, "atomic", project)
+    elif "atomic" in tags(repo, standard):
+        count(stats, "atomic", project)
+
+def main():
+    parser = argparse.ArgumentParser(description='Gather stats about tests in dist-git')
+    opts = parser.parse_args()
+
+    stats = { }
+    directory = tempfile.mkdtemp(prefix="test-stats")
+
+    for project in projects():
+        repo = clone(project, directory)
+        if repo:
+            gather(repo, project, stats)
+
+    shutil.rmtree(directory)
+
+    for name in list(stats.keys()):
+        stats["{0}-length".format(name)] = len(stats[name])
+    json.dump(stats, sys.stdout, indent=4)
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())
