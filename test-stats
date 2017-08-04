@@ -19,8 +19,10 @@
 # This file is part of Cockpit.
 #
 
-PAGURE = "https://upstreamfirst.fedorainfracloud.org/api/0/"
-BASE = "https://upstreamfirst.fedorainfracloud.org/"
+UPSTREAM_PAGURE = "https://upstreamfirst.fedorainfracloud.org/api/0/"
+UPSTREAM_BASE = "https://upstreamfirst.fedorainfracloud.org/"
+
+DISTGIT_BASE = "https://src.fedoraproject.org/git/rpms/"
 
 import argparse
 import json
@@ -37,18 +39,31 @@ def retrieve(url):
     return urllib.request.urlopen(url).read()
 
 def projects():
-    url = urllib.parse.urljoin(PAGURE, "projects")
+    url = urllib.parse.urljoin(UPSTREAM_PAGURE, "projects")
     for project in json.loads(retrieve(url))["projects"]:
         if not project.get("parent"):
             yield project["name"]
 
-def clone(project, directory):
+def repos():
+    base = os.path.dirname(__file__)
+    with open(os.path.join(base, "repos"), "rb") as f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line:
+                yield line.decode("utf-8")
+
+def clone(url, directory):
+    target = os.path.join(directory, os.path.basename(url))
+    while os.path.exists(target):
+        target += ".x"
     try:
-        url = urllib.parse.urljoin(BASE, project)
-        subprocess.check_call(["git", "clone", url ], cwd=directory, stdout=sys.stderr.fileno())
+        subprocess.check_call(["git", "clone", url, target], cwd=directory, stdout=sys.stderr.fileno())
     except subprocess.CalledProcessError:
         return None
-    return os.path.join(directory, project)
+    return target
 
 def count(stats, field, project):
     if field not in stats:
@@ -72,10 +87,6 @@ def tags(repo, standard):
 
 def gather(repo, project, stats):
 
-    # Total number of repos with tests
-    # TODO: For now this counts them all, in upstreamfirst
-    count(stats, "total", project)
-
     # Standard entry point
     path = os.path.join(repo, "tests.yml")
     standard = os.path.exists(path)
@@ -96,9 +107,25 @@ def main():
     stats = { }
     directory = tempfile.mkdtemp(prefix="test-stats")
 
-    for project in projects():
-        repo = clone(project, directory)
+    # Dist git
+    for project in repos():
+        url = urllib.parse.urljoin(DISTGIT_BASE, project)
+        repo = clone(url, directory)
         if repo:
+            sub = os.path.join(repo, "tests")
+            count(stats, "distgit", project)
+            if os.path.exists(sub):
+                count(stats, "distgit-tests", project)
+                gather(sub, project, stats)
+        else:
+            count(stats, "missing", project)
+
+    # Upstream first projects
+    for project in projects():
+        url = urllib.parse.urljoin(UPSTREAM_BASE, project)
+        repo = clone(url, directory)
+        if repo:
+            count(stats, "upstream", project)
             gather(repo, project, stats)
 
     shutil.rmtree(directory)
