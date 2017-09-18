@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+#
+# Copyright Red Hat Inc
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Cockpit.
+#
+
+UPSTREAM_PAGURE = "https://upstreamfirst.fedorainfracloud.org/api/0/"
+UPSTREAM_BASE = "https://upstreamfirst.fedorainfracloud.org/"
+
+DISTGIT_BASE = "https://src.fedoraproject.org/git/rpms/"
+
+import argparse
+import json
+import os
+import random
+import sys
+import tempfile
+import shutil
+import subprocess
+
+import urllib.request
+import urllib.parse
+
+DISTGIT_BASE = "https://src.fedoraproject.org/git/rpms/"
+
+def main():
+    parser = argparse.ArgumentParser(description="Gather koji stats")
+    opts = parser.parse_args()
+
+    stats = { }
+    directory = tempfile.mkdtemp(prefix="koji-stats")
+
+    # Dist git
+    repos = repositories()
+
+    offset = random.randint(0, len(repos))
+    while True:
+        offset = (start + 1) % len(repos)
+        project = repos[offset]
+
+        url = urllib.parse.urljoin(DISTGIT_BASE, project)
+        repo = clone(url, directory)
+        if not repo:
+            continue
+
+        start = time.time()
+        local(directory)
+        duration = int(time.time() - start)
+        log("mock", project, duration)
+
+        start = time.time()
+        koji(directory)
+        duration = int(time.time() - start)
+        log("koji", project, duration)
+
+    return 0
+
+def repositories():
+    results = [ ]
+    base = os.path.dirname(__file__)
+    with open(os.path.join(base, "repos"), "rb") as f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line:
+                results.append(line.decode("utf-8"))
+    return results
+
+def log(self, *args):
+    with open(os.path.join(os.path.basename(__file__), "koji-stats.log"), 'a') as f:
+        f.write("\t".join(args) + "\n")
+
+def clone(url, directory):
+    target = os.path.join(directory, os.path.basename(url))
+    while os.path.exists(target):
+        target += ".x"
+    try:
+        subprocess.check_call(["git", "clone", url, target], cwd=directory, stdout=sys.stderr.fileno())
+    except subprocess.CalledProcessError:
+        return None
+    return target
+
+def build(directory):
+    subprocess.check_call(["fedpkg", "--scratch", "build"], cwd=directory, stdout=sys.stderr.fileno())
+
+def local(directory):
+    subprocess.check_call(["fedpkg", "mockbuild"])
+
+if __name__ == '__main__':
+    sys.exit(main())
