@@ -30,6 +30,7 @@ import os
 import random
 import sys
 import tempfile
+import time
 import shutil
 import subprocess
 
@@ -40,17 +41,18 @@ DISTGIT_BASE = "https://src.fedoraproject.org/git/rpms/"
 
 def main():
     parser = argparse.ArgumentParser(description="Gather koji stats")
+    parser.add_argument("--scratch", action="store", default="/tmp", help="Scratch directory")
     opts = parser.parse_args()
 
     stats = { }
-    directory = tempfile.mkdtemp(prefix="koji-stats")
+    directory = tempfile.mkdtemp(prefix="koji-stats", dir=opts.scratch)
 
     # Dist git
     repos = repositories()
 
     offset = random.randint(0, len(repos))
     while True:
-        offset = (start + 1) % len(repos)
+        offset = (offset + 1) % len(repos)
         project = repos[offset]
 
         url = urllib.parse.urljoin(DISTGIT_BASE, project)
@@ -59,14 +61,21 @@ def main():
             continue
 
         start = time.time()
-        local(directory)
+        local(repo)
         duration = int(time.time() - start)
-        log("mock", project, duration)
+        log("mock", project, str(duration))
 
         start = time.time()
-        koji(directory)
+        koji(repo)
         duration = int(time.time() - start)
-        log("koji", project, duration)
+        log("koji", project, str(duration))
+
+        start = time.time()
+        koji(repo, "x86_64")
+        duration = int(time.time() - start)
+        log("koji-x86_64", project, str(duration))
+
+        shutil.rmtree(repo)
 
     return 0
 
@@ -84,8 +93,10 @@ def repositories():
     return results
 
 def log(self, *args):
-    with open(os.path.join(os.path.basename(__file__), "koji-stats.log"), 'a') as f:
-        f.write("\t".join(args) + "\n")
+    line = "\t".join(args) + "\n"
+    sys.stdout.write(line)
+    with open(os.path.join(os.path.dirname(__file__), "koji-stats.log"), 'a') as f:
+        f.write(line)
 
 def clone(url, directory):
     target = os.path.join(directory, os.path.basename(url))
@@ -95,13 +106,18 @@ def clone(url, directory):
         subprocess.check_call(["git", "clone", url, target], cwd=directory, stdout=sys.stderr.fileno())
     except subprocess.CalledProcessError:
         return None
+    subprocess.check_call(["git", "checkout", "f26"], cwd=target, stdout=sys.stderr.fileno())
     return target
 
-def build(directory):
-    subprocess.check_call(["fedpkg", "--scratch", "build"], cwd=directory, stdout=sys.stderr.fileno())
+def koji(directory, arch=None):
+    if arch:
+        cmd = ["fedpkg", "--scratch", "--arches", arch, "build"]
+    else:
+        cmd = ["fedpkg", "--scratch", "build"]
+    subprocess.check_call(cmd, cwd=directory, stdout=sys.stderr.fileno())
 
 def local(directory):
-    subprocess.check_call(["fedpkg", "mockbuild"])
+    subprocess.check_call(["fedpkg", "mockbuild"], cwd=directory, stdout=sys.stderr.fileno())
 
 if __name__ == '__main__':
     sys.exit(main())
