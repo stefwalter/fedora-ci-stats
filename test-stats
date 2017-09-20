@@ -100,6 +100,11 @@ def gather(repo, project, stats):
     elif "atomic" in tags(repo, standard):
         count(stats, "atomic", project)
 
+    if os.path.exists(os.path.join(repo, "test_cloud.yml")) or \
+       os.path.exists(os.path.join(repo, "test_local.yml")) or \
+       os.path.exists(os.path.join(repo, "test_docker.yml")):
+        count(stats, "legacy", project)
+
 def main():
     parser = argparse.ArgumentParser(description='Gather stats about tests in dist-git')
     opts = parser.parse_args()
