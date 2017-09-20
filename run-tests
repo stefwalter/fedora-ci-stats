@@ -1,0 +1,18 @@
+#!/bin/sh -euf
+
+# Prepare atomic host to test, report and artifacts dirs
+export TEST_SUBJECTS="$PWD/atomic.qcow2"
+test -f $TEST_SUBJECTS || curl -o $TEST_SUBJECTS.tmp http://artifacts.ci.centos.org/fedora-atomic/f26/images/latest-atomic.qcow2
+rm -rf report.txt artifacts/
+
+# Go through each project in upstreamfirst, clone it and put pass/fail in report.txt
+curl https://upstreamfirst.fedorainfracloud.org/api/0/projects?short=true | grep '"fullname"' | grep -v '/' | cut -d '"' -f 4 | while read repo; do
+	git clone https://upstreamfirst.fedorainfracloud.org/$repo
+	export ANSIBLE_INVENTORY=$(test -e $repo/inventory && echo $repo/inventory || echo /usr/share/ansible/inventory)
+	export TEST_ARTIFACTS="$PWD/artifacts/$repo"
+	if ( ansible-playbook -t atomic -e "subjects=$TEST_SUBJECTS" -e "artifacts=$TEST_ARTIFACTS" $repo/tests.yml > tests.log 2> tests.log ); then
+		printf "$repo pass\n" >> report.txt
+	else
+		printf "$repo fail\n" >> report.txt
+	fi
+done
