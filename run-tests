@@ -10,7 +10,7 @@ curl https://upstreamfirst.fedorainfracloud.org/api/0/projects?short=true | grep
 	git clone https://upstreamfirst.fedorainfracloud.org/$repo clone/$repo
 	export ANSIBLE_INVENTORY=$(test -e $repo/inventory && echo clone/$repo/inventory || echo /usr/share/ansible/inventory)
 	export TEST_ARTIFACTS="$PWD/artifacts/$repo"
-	if ! ansible-playbook --list-tags clone/$repo/tests.yml | grep atomic; then
+	if ! ansible-playbook -i localhost, --list-tags clone/$repo/tests.yml | grep atomic; then
 		printf "$repo skip\n" >> report.txt
 	elif ansible-playbook -t atomic -e "subjects=$TEST_SUBJECTS" -e "artifacts=$TEST_ARTIFACTS" clone/$repo/tests.yml; then
 		printf "$repo pass\n" >> report.txt
