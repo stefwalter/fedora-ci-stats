@@ -60,7 +60,7 @@ def clone(url, directory):
     while os.path.exists(target):
         target += ".x"
     try:
-        subprocess.check_call(["git", "clone", url, target], cwd=directory, stdout=sys.stderr.fileno())
+        subprocess.check_call(["git", "clone", "--depth", "1", url, target], cwd=directory, stdout=sys.stderr.fileno())
     except subprocess.CalledProcessError:
         return None
     return target
