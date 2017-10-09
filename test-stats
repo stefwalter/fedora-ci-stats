@@ -19,24 +19,28 @@
 # This file is part of Cockpit.
 #
 
-UPSTREAM_PAGURE = "https://upstreamfirst.fedorainfracloud.org/api/0/"
-UPSTREAM_BASE = "https://upstreamfirst.fedorainfracloud.org/"
 
-DISTGIT_BASE = "https://src.fedoraproject.org/git/rpms/"
+"""This script requires standard-test-roles:
+https://pagure.io/standard-test-roles/
 
-import argparse
-import json
+"""
+
 import os
 import sys
-import tempfile
+import json
 import shutil
+import argparse
+import tempfile
 import subprocess
-
-import urllib.request
 import urllib.parse
+import urllib.request
+
+UPSTREAM_PAGURE = "https://upstreamfirst.fedorainfracloud.org/api/0/"
+UPSTREAM_BASE = "https://upstreamfirst.fedorainfracloud.org/"
+DISTGIT_BASE = "https://src.fedoraproject.org/git/rpms/"
 
 def retrieve(url):
-    return urllib.request.urlopen(url).read()
+    return urllib.request.urlopen(url).read().decode('utf-8')
 
 def projects():
     url = urllib.parse.urljoin(UPSTREAM_PAGURE, "projects")
@@ -60,22 +64,34 @@ def clone(url, directory):
     while os.path.exists(target):
         target += ".x"
     try:
-        subprocess.check_call(["git", "clone", "--depth", "1", url, target], cwd=directory, stdout=sys.stderr.fileno())
+        # Do shallow clone with a history truncated.
+        subprocess.check_call(["git", "clone", "--depth=1", url, target],
+                              cwd=directory, stdout=sys.stderr.fileno())
     except subprocess.CalledProcessError:
         return None
     return target
 
 def count(stats, field, project):
+    """Adds a project to a list for specific category:
+    stats - is a dictionary in next format:
+    {'atomic': ["pkg1", "pkg2", "pkg3"],
+     'legacy': ["pkg2",],
+     'tests.yaml': ["pkg1",]}
+
+    """
     if field not in stats:
-        stats[field] = [ ]
-    stats[field].append(project)
+        stats[field] = []
+    if project not in stats[field]:
+        stats[field].append(project)
 
 def tags(repo, standard):
     try:
         playbook = standard and "tests.yml" or "test_local.yml"
         environ = os.environ.copy()
         environ["LC_ALL"] = "C"
-        output = subprocess.check_output([ "ansible-playbook", "--list-tags", playbook ], env=environ, cwd=repo)
+        output = subprocess.check_output([ "ansible-playbook",
+                                          "--list-tags", playbook ],
+                                         env=environ, cwd=repo)
     except subprocess.CalledProcessError:
         output = b""
 
@@ -86,33 +102,36 @@ def tags(repo, standard):
                 yield tag.strip()
 
 def gather(repo, project, stats):
+    """Looks for standard tests locations. If found adds it to the list.
 
+    """
     # Standard entry point
     path = os.path.join(repo, "tests.yml")
     standard = os.path.exists(path)
     if standard:
         count(stats, "tests.yml", project)
-
     # Check if we have an old style test_cloud.yml file
     path = os.path.join(repo, "test_cloud.yml")
     if os.path.exists(path):
         count(stats, "atomic", project)
     elif "atomic" in tags(repo, standard):
         count(stats, "atomic", project)
-
     if os.path.exists(os.path.join(repo, "test_cloud.yml")) or \
        os.path.exists(os.path.join(repo, "test_local.yml")) or \
        os.path.exists(os.path.join(repo, "test_docker.yml")):
         count(stats, "legacy", project)
 
 def main():
-    parser = argparse.ArgumentParser(description='Gather stats about tests in dist-git')
+    parser = argparse.ArgumentParser(
+        description='Gather stats about tests in dist-git')
+    parser.add_argument("--wikiout", metavar='FILE', default=None,
+                        help="Dump output to FILE in MediaWiki format.")
+    parser.add_argument("--keepworkdir", help="Keep workdir with cloned repos.",
+                        action='store_true')
     opts = parser.parse_args()
-
     stats = { }
     directory = tempfile.mkdtemp(prefix="test-stats")
-
-    # Dist git
+    # Gather statistics for dist-git.
     for project in repos():
         url = urllib.parse.urljoin(DISTGIT_BASE, project)
         repo = clone(url, directory)
@@ -124,21 +143,67 @@ def main():
                 gather(sub, project, stats)
         else:
             count(stats, "missing", project)
-
-    # Upstream first projects
+    # Gather statistics for upstream first projects.
     for project in projects():
         url = urllib.parse.urljoin(UPSTREAM_BASE, project)
         repo = clone(url, directory)
         if repo:
             count(stats, "upstream", project)
             gather(repo, project, stats)
-
-    shutil.rmtree(directory)
-
+    if not opts.keepworkdir:
+        shutil.rmtree(directory)
+    # Dump results to stdout.
     for name in list(stats.keys()):
         stats["{0}-length".format(name)] = len(stats[name])
     json.dump(stats, sys.stdout, indent=4)
+    # Dump results in MediaWiki format.
+    if opts.wikiout:
+        pkgs_categories = [category
+                           for category, pkgs in stats.items()
+                           if isinstance(pkgs, list)]
+        pkgs_categories = sorted(pkgs_categories)
+        pkgs_categories_len = [category
+                               for category, lenght in stats.items()
+                               if isinstance(lenght, int)]
+        pkgs_categories_len = sorted(pkgs_categories_len) # To keep sorted
+        url_category = {"distgit" :
+                        "https://src.fedoraproject.org/rpms/%s/tree/master",
+                        "distgit-tests" :
+                        "https://src.fedoraproject.org/rpms/%s/blob/master/f/tests",
+                        "tests.yml" :
+                        "https://src.fedoraproject.org/rpms/%s/blob/master/f/tests/tests.yml",
+                        "upstream" :
+                        "https://upstreamfirst.fedorainfracloud.org/%s/tree/master"}
+        # Holds all known packages.
+        know_pkgs = set()
+        for category in pkgs_categories:
+                know_pkgs.update(stats[category])
+        know_pkgs = sorted(list(know_pkgs))
+        # MediaWiki table: https://www.mediawiki.org/wiki/Help:Tables
+        table = """{| class="wikitable"
+                    ! style="text-align:left;"| Package
+                """
+        for category in pkgs_categories:
+            table += "! %s\n" % category
+        for pkg in know_pkgs:
+            table += "|-\n"
+            table += "|%s\n" % pkg
+            for category in pkgs_categories:
+                    pkgs = stats[category]
+                    if pkg in stats[category]:
+                        url = url_category[category]
+                        url = url % pkg
+                        table += "|[%s Yes]\n" % url
+                    else:
+                        table += "|'''No'''\n"
+        table += "|-\n"
+        table += "|'''Total'''\n"
+        for category in pkgs_categories_len:
+            table += "|'''%s'''\n" % (str(stats[category]))
+        table += "|}\n"
+        with open(opts.wikiout, 'w') as mwfile:
+            mwfile.write(table)
     return 0
 
 if __name__ == '__main__':
-    sys.exit(main())
+        sys.exit(main())
