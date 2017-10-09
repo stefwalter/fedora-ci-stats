@@ -1,0 +1,51 @@
+apiVersion: batch/v2alpha1
+kind: CronJob
+metadata:
+  name: tests2wiki
+spec:
+  schedule: "32 16 * * *"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels: 
+            parent: "cronjobpi"
+        spec:
+          containers:
+          - name: wiki
+            image: python
+            command:
+                - bash
+                - -c
+                - |
+                  cd /tmp
+                  HOME=/tmp pip install --user virtualenv
+                  PYTHONPATH="/tmp/.local/lib/python3.6/site-packages:$PYTHONPATH" /tmp/.local/bin/virtualenv  /tmp/v
+                  source /tmp/v/bin/activate
+                  pip install mwclient
+                  pip install ansible
+                  export GIT_COMMITTER_NAME=git
+                  export GIT_COMMITTER_EMAIL=git@git.git
+                  git clone https://github.com/stefwalter/fedora-ci-stats.git
+                  git clone https://pagure.io/standard-test-roles.git
+                  echo -e '[defaults]\nroles_path=/tmp/standard-test-roles/roles' > /tmp/ansible.cfg
+                  export ANSIBLE_CONFIG=/tmp/ansible.cfg
+                  pushd fedora-ci-stats
+                  python test-stats > data.txt
+                  cat data.txt
+                  export WIKI_USER=<FAS ACCOUNT>
+                  export WIKI_PASS=<FAS PASS>
+                  python publish2wiki.py
+          restartPolicy: OnFailure
+
+# Before installing this job on OpenShift set WIKI_USER/WIKI_PASS
+# Then install job with:
+# $ oc create -f dump2wiki-cronjob.yml
+# cronjob "tests2wiki" created
+#
+# $ oc get cronjobs
+# NAME         SCHEDULE      SUSPEND   ACTIVE    LAST-SCHEDULE
+# tests2wiki   32 16 * * *   False     1         Thu, 05 Oct 2017 18:32:00 +0200
+#
+
+# vim: et ts=2 sw=2 ai
